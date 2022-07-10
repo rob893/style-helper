@@ -1,0 +1,118 @@
+using System.Diagnostics;
+using System.Reflection;
+using Microsoft.AspNetCore.Mvc.ApiExplorer;
+using Microsoft.OpenApi.Models;
+using RHerber.Common.AspNetCore.Extensions;
+using RHerber.Common.AspNetCore.Models.Settings;
+using StyleHelper.Constants;
+using Swashbuckle.AspNetCore.SwaggerGen;
+
+namespace StyleHelper.ApplicationStartup.ServiceCollectionExtensions;
+
+public static class SwaggerServiceCollectionExtensions
+{
+    public static IServiceCollection AddSwaggerServices(this IServiceCollection services, IConfiguration config)
+    {
+        if (services == null)
+        {
+            throw new ArgumentNullException(nameof(services));
+        }
+
+        if (config == null)
+        {
+            throw new ArgumentNullException(nameof(config));
+        }
+
+        services.Configure<SwaggerSettings>(config.GetSection(ConfigurationKeys.Swagger));
+
+        services.AddSwaggerGen(options =>
+        {
+            var provider = services.BuildServiceProvider().GetRequiredService<IApiVersionDescriptionProvider>();
+
+            foreach (var description in provider.ApiVersionDescriptions)
+            {
+                options.SwaggerDoc(
+                    description.GroupName,
+                    new OpenApiInfo
+                    {
+                        Version = description.GroupName,
+                        Title = FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductName,
+                        Description = $"{FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductName} - {config.GetEnvironment()} ({Assembly.GetExecutingAssembly().GetName().Version})",
+                        Contact = new OpenApiContact
+                        {
+                            Name = "Health Checks UI",
+                            Url = new Uri("https://rwherber.com/health-checker/healthchecks-ui")
+                        }
+                    });
+            }
+
+            // Remove version parameter from ui
+            options.OperationFilter<RemoveVersionParameterFilter>();
+            // Replace {version} with actual version in routes in swagger doc
+            options.DocumentFilter<ReplaceVersionWithExactValueInPathFilter>();
+            options.CustomSchemaIds(id => id.FullName);
+
+            // Add the security token option to swagger
+            options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+            {
+                Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+                Name = "Authorization",
+                In = ParameterLocation.Header,
+                Type = SecuritySchemeType.ApiKey
+            });
+            options.AddSecurityRequirement(new OpenApiSecurityRequirement
+            {
+                    {
+                        new OpenApiSecurityScheme
+                        {
+                            Reference = new OpenApiReference
+                            {
+                                Type = ReferenceType.SecurityScheme,
+                                Id = "Bearer"
+                            }
+                        }, new List<string>()
+                    }
+            });
+
+            // Set the comments path for the Swagger JSON and UI.
+            var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+            var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+            options.IncludeXmlComments(xmlPath);
+            options.SwaggerGeneratorOptions.DescribeAllParametersInCamelCase = true;
+
+            //options.Cus
+        });
+
+        services.AddSwaggerGenNewtonsoftSupport();
+
+        return services;
+    }
+
+    private class RemoveVersionParameterFilter : IOperationFilter
+    {
+        public void Apply(OpenApiOperation operation, OperationFilterContext context)
+        {
+            var versionParameter = operation.Parameters.FirstOrDefault(p => p.Name == "version");
+
+            if (versionParameter == null)
+            {
+                return;
+            }
+
+            operation.Parameters.Remove(versionParameter);
+        }
+    }
+
+    private class ReplaceVersionWithExactValueInPathFilter : IDocumentFilter
+    {
+        public void Apply(OpenApiDocument swaggerDoc, DocumentFilterContext context)
+        {
+            var paths = new OpenApiPaths();
+            foreach (var path in swaggerDoc.Paths)
+            {
+                paths.Add(path.Key.Replace("v{version}", swaggerDoc.Info.Version), path.Value);
+            }
+            swaggerDoc.Paths = paths;
+        }
+    }
+}
